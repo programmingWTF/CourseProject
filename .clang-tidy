@@ -1,0 +1,26 @@
+# .clang-tidy
+# 核心：启用哪些检查？
+# -* 表示先禁用所有默认检查
+# readability-*: 可读性相关（变量命名等）
+# bugprone-*: 容易出 Bug 的写法
+# modernize-*: 现代化建议（比如 NULL -> nullptr，override 等）
+# performance-*: 性能建议（比如传值改为传引用）
+# Checks: '-*,readability-*,bugprone-*,modernize-*,performance-*,google-*,-modernize-use-trailing-return-type,-google-runtime-int64,misc-include-cleaner'
+Checks: >-
+  -*,
+  readability-*,
+  bugprone-*,
+  modernize-*,
+  performance-*,
+  google-*,
+  -google-runtime-int,
+  -readability-identifier-length,
+  -readability-isolate-declaration,
+  -modernize-use-trailing-return-type,
+  -google-build-using-namespace
+
+# 把警告视为错误（可选，初学者建议不加，否则满屏红线心态容易崩）
+# WarningsAsErrors: ''
+
+# 头文件过滤（只检查当前项目的文件，忽略第三方库）
+HeaderFilterRegex: '.*'

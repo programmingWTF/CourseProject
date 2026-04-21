@@ -1,0 +1,2 @@
+CompileFlags:
+  Add: [-I, "D:/Software/vcpkg/installed/x64-windows/include"]
