@@ -1,4 +1,4 @@
-# Point Cloud Pipeline Control (PointCloudManager)
+# Point-Cloud-Pipeline-Control
 
 ## 项目简介
 
@@ -50,7 +50,7 @@ cmake --build build --config Release
 
 ## 运行
 
-生成后直接运行可执行文件（Windows 下为 `PointCloudManager.exe`）。
+生成后直接运行可执行文件（Windows 下为 `Point-Cloud-Pipeline-Control.exe`）。
 
 ## 常见问题与调试
 

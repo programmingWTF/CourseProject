@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(PointCloudManager)
+project(Point-Cloud-Pipeline-Control)
 
 if(MSVC)
     # 强制 MSVC 使用 UTF-8 编码读取源文件并生成输出
