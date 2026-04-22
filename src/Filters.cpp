@@ -17,7 +17,7 @@ void PassThroughFilter::apply(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pass.filter(*filtered_cloud);
-    cloud = filtered_cloud;  // 更新指针
+    cloud = filtered_cloud;  // ¸üÐÂÖ¸Õë
 }
 
 // VoxelGridFilter

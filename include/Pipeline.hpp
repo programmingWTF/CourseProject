@@ -6,7 +6,6 @@
 #include "FilterBase.hpp"
 #include "Logger.hpp"
 
-
 class PointCloudPipeline {
 public:
     PointCloudPipeline(std::shared_ptr<ProcessingLog> logger);

@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.10)
 project(PointCloudManager)
 
+if(MSVC)
+    # 强制 MSVC 使用 UTF-8 编码读取源文件并生成输出
+    add_compile_options(/utf-8)
+else()
+    # 对于 GCC 或 Clang
+    add_compile_options(-finput-charset=UTF-8)
+endif()
+
 # 1. 寻找依赖库: PCL, OpenGL, GLFW
 find_package(PCL 1.8 REQUIRED COMPONENTS common io filters visualization features kdtree search)
 find_package(OpenGL REQUIRED)

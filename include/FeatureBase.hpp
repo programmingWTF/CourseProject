@@ -1,11 +1,9 @@
-#ifndef FEATURE_BASE_HPP
-#define FEATURE_BASE_HPP
+#pragma once
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
 #include <memory>
-
 
 template <typename PointInT, typename FeatureOutT>
 class FeatureBase {
@@ -20,5 +18,3 @@ public:
 
     virtual FeatureCloudOutPtr extract(const PointCloudInPtr& input) = 0;
 };
-
-#endif  // FEATURE_BASE_HPP

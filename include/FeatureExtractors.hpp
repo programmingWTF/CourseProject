@@ -1,5 +1,4 @@
-#ifndef FEATURE_EXTRACTORS_HPP
-#define FEATURE_EXTRACTORS_HPP
+#pragma once
 
 #include <pcl/features/normal_3d.h>
 #include <pcl/features/principal_curvatures.h>
@@ -27,5 +26,3 @@ private:
     int k_neighbors_;
     double search_radius_;
 };
-
-#endif  // FEATURE_EXTRACTORS_HPP
