@@ -6,6 +6,10 @@ void PointCloudPipeline::addStage(std::shared_ptr<FilterBase> filter) {
     stages_.push_back(filter);
 }
 
+void PointCloudPipeline::clearStages() {
+    stages_.clear();
+}
+
 void PointCloudPipeline::setNormalExtractor(std::shared_ptr<NormalExtractor> ne) {
     normal_extractor_ = ne;
 }
@@ -22,8 +26,15 @@ pcl::PointCloud<pcl::PrincipalCurvatures>::Ptr PointCloudPipeline::getCurvatures
     return curvatures_;
 }
 
+const std::vector<PointCloudPipeline::StageSnapshot>& PointCloudPipeline::getStageSnapshots() const {
+    return stage_snapshots_;
+}
+
 void PointCloudPipeline::execute(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     if (!cloud || cloud->empty()) return;
+
+    stage_snapshots_.clear();
+    pcl::PointCloud<pcl::PrincipalCurvatures>::Ptr last_curvatures;
 
     for (const auto& stage : stages_) {
         size_t origin_count = cloud->size();
@@ -40,5 +51,6 @@ void PointCloudPipeline::execute(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     }
     if (curvature_extractor_) {
         curvatures_ = curvature_extractor_->extract(cloud);
+        last_curvatures = curvatures_;
     }
 }

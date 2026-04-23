@@ -86,6 +86,7 @@ enum class StepType {
 
 struct PipelineStepConfig {
     StepType type = StepType::PassThrough;
+    bool save_output = false;  // 是否保存该步骤的输出
 
     // PassThrough
     int pass_axis_idx = 2;  // 0:x, 1:y, 2:z
@@ -105,7 +106,7 @@ struct PipelineStepConfig {
 
     // Normals for display
     int normal_ksearch = 10;
-    float normal_radius = 0.0f;
+    float normal_display_length = 0.05f;  // 法线显示长度（仅用于可视化，不影响计算）
 
     // Display
     DisplayConfig display;
@@ -143,6 +144,52 @@ const char* axis_idx_to_field(int axis_idx) {
 
 bool is_display_step(StepType type) {
     return type == StepType::ShowCloud || type == StepType::ShowNormals;
+}
+
+// ================================================================
+// 文件保存辅助函数
+// ================================================================
+std::string get_output_folder(const std::string& original_file_path) {
+    if (original_file_path.empty()) return "";
+
+    // 获取原文件所在目录
+    size_t last_slash = original_file_path.find_last_of("\\/");
+    std::string dir = (last_slash != std::string::npos) ? original_file_path.substr(0, last_slash) : ".";
+
+    // 创建output文件夹路径
+    std::string output_dir = dir + "/output";
+
+    // 如果output文件夹不存在，创建它
+    fs::create_directories(output_dir);
+
+    return output_dir;
+}
+
+std::string generate_output_filename(const std::string& output_folder, int step_number,
+                                     const std::string& original_filename) {
+    if (output_folder.empty()) return "";
+
+    // 获取原文件的扩展名
+    std::string ext = ".pcd";  // 默认格式为PCD
+    if (original_filename.size() >= 4) {
+        std::string original_ext = original_filename.substr(original_filename.size() - 4);
+        if (original_ext == ".ply" || original_ext == ".bin") {
+            ext = original_ext;
+        }
+    }
+
+    // 生成文件名：output_folder/filename_XN.ext
+    // 例如：output/cloud_01.pcd, output/cloud_02.ply
+    char filename[512];
+    snprintf(filename, sizeof(filename), "%s/cloud_%02d%s", output_folder.c_str(), step_number, ext.c_str());
+    return std::string(filename);
+}
+
+bool save_point_cloud(const std::string& filepath, const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
+    if (!cloud || cloud->empty()) {
+        return false;
+    }
+    return PointCloudIO::save(filepath, cloud);
 }
 
 bool setup_imgui_font(float font_pixel_size, std::string& loaded_font_path) {
@@ -197,14 +244,14 @@ PipelineStepConfig make_default_step(StepType type) {
 }
 
 void render_display_config_ui(DisplayConfig& config, bool allow_normals_edit) {
-    ImGui::SliderInt("Point Size", &config.point_size, 1, 8);
+    ImGui::SliderInt("点大小", &config.point_size, 1, 8);
     ImGui::SliderInt("点云颜色 R", &config.color_r, 0, 255);
     ImGui::SliderInt("点云颜色 G", &config.color_g, 0, 255);
     ImGui::SliderInt("点云颜色 B", &config.color_b, 0, 255);
 
     ImGui::Checkbox("显示坐标轴", &config.show_coordinate_axis);
     if (config.show_coordinate_axis) {
-        ImGui::SliderFloat("坐标轴刻度", &config.axis_scale, 0.02F, 1.0F, "%.2F");
+        ImGui::SliderFloat("坐标轴缩放", &config.axis_scale, 0.02F, 1.0F, "%.2F");
     }
 
     ImGui::SliderFloat("背景颜色 R", &config.background_r, 0.0F, 1.0F, "%.2F");
@@ -343,7 +390,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-    GLFWwindow* window = glfwCreateWindow(560, 980, "Point Cloud Pipeline Control", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(1400, 850, "Point Cloud Pipeline Control", NULL, NULL);
     if (window == NULL) return 1;
 
     glfwSetWindowCloseCallback(window, glfw_window_close_callback);
@@ -376,7 +423,7 @@ int main(int argc, char** argv) {
     std::string current_file_name;
     std::string current_file_path;
 
-    char search_dir[512] = "../data";
+    char search_dir[512] = "./";
 
     std::vector<PipelineStepConfig> pipeline_steps = {
         make_default_step(StepType::PassThrough),      make_default_step(StepType::VoxelGrid),
@@ -460,64 +507,119 @@ int main(int argc, char** argv) {
             "特征：计算曲率",    "可视化：显示点云", "可视化：显示法线",
         };
 
-        for (std::size_t i = 0; i < pipeline_steps.size(); ++i) {
-            ImGui::PushID(static_cast<int>(i));
-            ImGui::Separator();
-            ImGui::Text("Step %d", static_cast<int>(i + 1));
-
-            int current_type = static_cast<int>(pipeline_steps[i].type);
-            ImGui::SetNextItemWidth(300.0f);
-            if (ImGui::Combo("Type", &current_type, step_labels, IM_ARRAYSIZE(step_labels))) {
-                pipeline_steps[i] = make_default_step(static_cast<StepType>(current_type));
+        // 使用Columns实现水平布局：最多5列（每行显示5个步骤）
+        int max_cols = 5;
+        int num_cols = std::min(max_cols, static_cast<int>(pipeline_steps.size()));
+        if (num_cols > 0) {
+            ImGui::Columns(num_cols, "PipelineStepsColumns", false);
+            ImGui::SetColumnWidth(0, ImGui::GetWindowWidth() / num_cols - 10);
+            for (int c = 1; c < num_cols; ++c) {
+                ImGui::SetColumnWidth(c, ImGui::GetWindowWidth() / num_cols - 10);
             }
 
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Up") && i > 0) {
-                std::swap(pipeline_steps[i], pipeline_steps[i - 1]);
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Down") && i + 1 < pipeline_steps.size()) {
-                std::swap(pipeline_steps[i], pipeline_steps[i + 1]);
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Delete") && pipeline_steps.size() > 1) {
-                pipeline_steps.erase(pipeline_steps.begin() + static_cast<std::ptrdiff_t>(i));
-                ImGui::PopID();
-                break;
-            }
+            for (std::size_t i = 0; i < pipeline_steps.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
 
-            const StepType type = pipeline_steps[i].type;
+                // 每个步骤的边框
+                ImGui::BeginChild(("Step##" + std::to_string(i)).c_str(), ImVec2(-1, 400), true);
 
-            if (type == StepType::PassThrough) {
-                const char* axis_labels[] = {"x", "y", "z"};
-                ImGui::Combo("Axis", &pipeline_steps[i].pass_axis_idx, axis_labels, IM_ARRAYSIZE(axis_labels));
-                ImGui::DragFloatRange2("Min/Max", &pipeline_steps[i].pass_min, &pipeline_steps[i].pass_max, 0.2f,
-                                       -200.0f, 200.0f);
-            } else if (type == StepType::VoxelGrid) {
-                ImGui::SliderFloat("Leaf Size", &pipeline_steps[i].voxel_leaf_size, 0.001f, 0.5f, "%.3f m");
-            } else if (type == StepType::StatisticalOutlier) {
-                ImGui::SliderInt("Mean K", &pipeline_steps[i].sor_k, 1, 200);
-                ImGui::SliderFloat("Std Dev", &pipeline_steps[i].sor_std_dev, 0.1f, 5.0f, "%.2f");
-            } else if (type == StepType::ComputeCurvature) {
-                ImGui::SliderInt("Curvature KSearch", &pipeline_steps[i].curvature_ksearch, 3, 100);
-                ImGui::SliderFloat("Curvature Radius", &pipeline_steps[i].curvature_radius, 0.0f, 1.0f, "%.3f");
-                ImGui::TextWrapped("Radius > 0 时使用半径搜索，否则使用 KSearch。");
-            } else if (type == StepType::ShowCloud || type == StepType::ShowNormals) {
-                ImGui::SliderInt("Normal KSearch", &pipeline_steps[i].normal_ksearch, 3, 100);
-                ImGui::SliderFloat("Normal Radius", &pipeline_steps[i].normal_radius, 0.0f, 1.0f, "%.3f");
-                if (type == StepType::ShowNormals) {
-                    pipeline_steps[i].display.show_normals = true;
+                ImGui::Text("步骤 %d", static_cast<int>(i + 1));
+
+                int current_type = static_cast<int>(pipeline_steps[i].type);
+                ImGui::SetNextItemWidth(200);
+                if (ImGui::Combo(("类型##" + std::to_string(i)).c_str(), &current_type, step_labels,
+                                 IM_ARRAYSIZE(step_labels))) {
+                    pipeline_steps[i] = make_default_step(static_cast<StepType>(current_type));
                 }
-                render_display_config_ui(pipeline_steps[i].display, type != StepType::ShowNormals);
+
+                ImGui::Spacing();
+                float button_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3;
+
+                if (ImGui::Button(("上##" + std::to_string(i)).c_str(), ImVec2(button_width, 0)) && i > 0) {
+                    std::swap(pipeline_steps[i], pipeline_steps[i - 1]);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(("下##" + std::to_string(i)).c_str(), ImVec2(button_width, 0)) &&
+                    i + 1 < pipeline_steps.size()) {
+                    std::swap(pipeline_steps[i], pipeline_steps[i + 1]);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(("删除##" + std::to_string(i)).c_str(), ImVec2(button_width, 0)) &&
+                    pipeline_steps.size() > 2) {
+                    pipeline_steps.erase(pipeline_steps.begin() + static_cast<std::ptrdiff_t>(i));
+                    ImGui::EndChild();
+                    ImGui::PopID();
+                    ImGui::NextColumn();
+                    continue;
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+
+                const StepType type = pipeline_steps[i].type;
+
+                if (type == StepType::PassThrough) {
+                    const char* axis_labels[] = {"x", "y", "z"};
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::Combo(("轴##" + std::to_string(i)).c_str(), &pipeline_steps[i].pass_axis_idx, axis_labels,
+                                 IM_ARRAYSIZE(axis_labels));
+                    ImGui::SetNextItemWidth(200);
+                    ImGui::DragFloatRange2(("最小/最大##" + std::to_string(i)).c_str(), &pipeline_steps[i].pass_min,
+                                           &pipeline_steps[i].pass_max, 0.2f, -200.0f, 200.0f);
+                } else if (type == StepType::VoxelGrid) {
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderFloat(("体素大小##" + std::to_string(i)).c_str(), &pipeline_steps[i].voxel_leaf_size,
+                                       0.001f, 0.5f, "%.3f m");
+                } else if (type == StepType::StatisticalOutlier) {
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderInt(("均值K值##" + std::to_string(i)).c_str(), &pipeline_steps[i].sor_k, 1, 200);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderFloat(("标准差##" + std::to_string(i)).c_str(), &pipeline_steps[i].sor_std_dev, 0.1f,
+                                       5.0f, "%.2f");
+                } else if (type == StepType::ComputeCurvature) {
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderInt(("曲率K搜索##" + std::to_string(i)).c_str(), &pipeline_steps[i].curvature_ksearch,
+                                     3, 100);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderFloat(("曲率半径##" + std::to_string(i)).c_str(), &pipeline_steps[i].curvature_radius,
+                                       0.0f, 1.0f, "%.3f");
+                    ImGui::TextWrapped("半径 > 0 时使用半径搜索，否则使用 KSearch。");
+                } else if (type == StepType::ShowCloud) {
+                    ImGui::TextWrapped("点云显示模块");
+                    ImGui::TextWrapped("颜色/点大小等在下方显示参数区。");
+                } else if (type == StepType::ShowNormals) {
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderInt(("法线K搜索##" + std::to_string(i)).c_str(), &pipeline_steps[i].normal_ksearch, 3,
+                                     100);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderFloat(("法线长度##" + std::to_string(i)).c_str(),
+                                       &pipeline_steps[i].normal_display_length, 0.01f, 0.5f, "%.3f");
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::SliderInt(("法线密度##" + std::to_string(i)).c_str(),
+                                     &pipeline_steps[i].display.normal_level, 1, 100);
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+
+                // 保存输出选项（仅显示非ShowCloud步骤）
+                if (type != StepType::ShowCloud) {
+                    ImGui::Checkbox(("保存输出##" + std::to_string(i)).c_str(), &pipeline_steps[i].save_output);
+                    ImGui::TextWrapped("勾选则在output文件夹保存此步骤的输出。");
+                }
+
+                ImGui::EndChild();
+                ImGui::PopID();
+                ImGui::NextColumn();
             }
 
-            ImGui::PopID();
+            ImGui::Columns(1);
         }
 
         ImGui::Separator();
-        ImGui::SetNextItemWidth(300.0f);
+        ImGui::SetNextItemWidth(-1);
         ImGui::Combo("新增步骤类型", &add_step_type_idx, step_labels, IM_ARRAYSIZE(step_labels));
-        if (ImGui::Button("+ Add Step", ImVec2(-1, 30))) {
+        if (ImGui::Button("+ 添加步骤", ImVec2(-1, 30))) {
             pipeline_steps.push_back(make_default_step(static_cast<StepType>(add_step_type_idx)));
         }
 
@@ -539,64 +641,94 @@ int main(int argc, char** argv) {
         }
         ImGui::Text("预计视口数量：%d（1 个原始 + %d 个显示步骤）", 1 + display_step_count, display_step_count);
 
-        if (ImGui::Button("计算并刷新视图", ImVec2(-1, 48)) && cloud_loaded) {
+        if (ImGui::Button("执行流水线", ImVec2(-1, 48)) && cloud_loaded) {
             std::lock_guard<std::mutex> lock(vis_data->mutex);
 
             auto cloud_to_process = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*vis_data->cloud_original);
             vis_data->stage_snapshots.clear();
 
-            pcl::PointCloud<pcl::PrincipalCurvatures>::Ptr last_curvatures(
-                new pcl::PointCloud<pcl::PrincipalCurvatures>());
+            // 获取输出文件夹路径
+            std::string output_folder = get_output_folder(current_file_path);
+
+            // ============================================
+            // 使用Pipeline类来构建和执行流水线处理
+            // ============================================
+            auto pipeline = std::make_shared<PointCloudPipeline>(logger);
 
             int show_count = 0;
+            int step_counter = 0;  // 用于文件命名
+
             for (const auto& step : pipeline_steps) {
+                ++step_counter;
+
+                // 为过滤和特征提取步骤添加到Pipeline
                 if (step.type == StepType::PassThrough) {
                     auto filter = std::make_shared<PassThroughFilter>(axis_idx_to_field(step.pass_axis_idx),
                                                                       step.pass_min, step.pass_max);
-                    filter->apply(cloud_to_process);
-                    continue;
-                }
-
-                if (step.type == StepType::VoxelGrid) {
+                    pipeline->addStage(filter);
+                } else if (step.type == StepType::VoxelGrid) {
                     auto filter = std::make_shared<VoxelGridFilter>(step.voxel_leaf_size);
-                    filter->apply(cloud_to_process);
-                    continue;
-                }
-
-                if (step.type == StepType::StatisticalOutlier) {
+                    pipeline->addStage(filter);
+                } else if (step.type == StepType::StatisticalOutlier) {
                     auto filter = std::make_shared<StatisticalOutlierFilter>(step.sor_k, step.sor_std_dev);
-                    filter->apply(cloud_to_process);
-                    continue;
-                }
-
-                if (step.type == StepType::ComputeCurvature) {
+                    pipeline->addStage(filter);
+                } else if (step.type == StepType::ComputeCurvature) {
                     auto curvature_extractor = std::make_shared<CurvatureExtractor>(
                         step.curvature_ksearch, static_cast<double>(step.curvature_radius));
-                    last_curvatures = curvature_extractor->extract(cloud_to_process);
-                    continue;
-                }
+                    pipeline->setCurvatureExtractor(curvature_extractor);
+                } else if (is_display_step(step.type)) {
+                    // 对于显示步骤，先执行到此点，然后捕获快照
+                    pipeline->execute(cloud_to_process);
 
-                if (is_display_step(step.type)) {
+                    // 如果需要保存，生成输出文件并保存
+                    if (step.save_output) {
+                        std::string output_file =
+                            generate_output_filename(output_folder, step_counter, current_file_name);
+                        if (!output_file.empty()) {
+                            if (save_point_cloud(output_file, cloud_to_process)) {
+                                std::cout << "[INFO] Saved step " << step_counter << " to " << output_file << "\n";
+                            } else {
+                                std::cout << "[WARN] Failed to save step " << step_counter << "\n";
+                            }
+                        }
+                    }
+
                     VisualizerData::StageSnapshot snapshot;
                     snapshot.cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*cloud_to_process);
                     snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
                     snapshot.display = step.display;
 
                     if (snapshot.display.show_normals) {
-                        auto normal_extractor = std::make_shared<NormalExtractor>(
-                            step.normal_ksearch, static_cast<double>(step.normal_radius));
+                        // 使用K搜索（radius=0）来计算法线，不使用半径搜索
+                        auto normal_extractor = std::make_shared<NormalExtractor>(step.normal_ksearch, 0.0);
                         snapshot.normals = normal_extractor->extract(cloud_to_process);
+
+                        // 设置法线的显示长度（仅影响可视化，不影响计算）
+                        snapshot.display.normal_scale = step.normal_display_length;
                     }
 
                     ++show_count;
                     snapshot.title = "View " + std::to_string(show_count) + ": " + step_type_to_label(step.type);
-                    if (last_curvatures && !last_curvatures->empty()) {
+                    auto curvatures = pipeline->getCurvatures();
+                    if (curvatures && !curvatures->empty()) {
                         snapshot.title += " (curvature ready)";
                     }
 
                     vis_data->stage_snapshots.push_back(snapshot);
+
+                    // 重新建立Pipeline以继续后续步骤
+                    pipeline = std::make_shared<PointCloudPipeline>(logger);
+                } else {
+                    // 非显示步骤但需要保存时，仍需要在此处理
+                    if (step.type != StepType::PassThrough && step.type != StepType::VoxelGrid &&
+                        step.type != StepType::StatisticalOutlier && step.type != StepType::ComputeCurvature) {
+                        // 其他类型不需要保存
+                    }
                 }
             }
+
+            // 执行最后的Pipeline步骤
+            pipeline->execute(cloud_to_process);
 
             if (vis_data->stage_snapshots.empty()) {
                 VisualizerData::StageSnapshot final_snapshot;
