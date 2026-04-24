@@ -90,23 +90,23 @@ struct PipelineStepConfig {
 
     // PassThrough
     int pass_axis_idx = 2;  // 0:x, 1:y, 2:z
-    float pass_min = -100.0f;
-    float pass_max = 100.0f;
+    float pass_min = -100.0F;
+    float pass_max = 100.0F;
 
     // VoxelGrid
-    float voxel_leaf_size = 0.01f;
+    float voxel_leaf_size = 0.01F;
 
     // StatisticalOutlier
     int sor_k = 50;
-    float sor_std_dev = 1.0f;
+    float sor_std_dev = 1.0F;
 
     // Curvature
     int curvature_ksearch = 10;
-    float curvature_radius = 0.0f;
+    float curvature_radius = 0.0F;
 
     // Normals for display
     int normal_ksearch = 10;
-    float normal_display_length = 0.05f;  // 法线显示长度（仅用于可视化，不影响计算）
+    float normal_display_length = 0.05F;  // 法线显示长度（仅用于可视化，不影响计算）
 
     // Display
     DisplayConfig display;
@@ -212,13 +212,13 @@ bool setup_imgui_font(float font_pixel_size, std::string& loaded_font_path) {
         if (font != nullptr) {
             loaded_font_path = font_path;
             io.FontDefault = font;
-            io.FontGlobalScale = 1.0f;
+            io.FontGlobalScale = 1.0F;
             return true;
         }
     }
 
     io.Fonts->AddFontDefault();
-    io.FontGlobalScale = 1.30f;
+    io.FontGlobalScale = 1.30F;
     loaded_font_path = "ImGui Default Font";
     return false;
 }
@@ -390,7 +390,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-    GLFWwindow* window = glfwCreateWindow(1400, 850, "Point Cloud Pipeline Control", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(1450, 1500, "Point Cloud Pipeline Control", NULL, NULL);
     if (window == NULL) return 1;
 
     glfwSetWindowCloseCallback(window, glfw_window_close_callback);
@@ -401,9 +401,9 @@ int main(int argc, char** argv) {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
 
-    ImGui::GetStyle().ScaleAllSizes(1.15f);
+    ImGui::GetStyle().ScaleAllSizes(1.15F);
     std::string font_loaded_path;
-    const bool has_chinese_font = setup_imgui_font(24.0f, font_loaded_path);
+    const bool has_chinese_font = setup_imgui_font(24.0F, font_loaded_path);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
@@ -468,7 +468,7 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            ImGui::TextColored(ImVec4(1, 0.2f, 0.2f, 1), "路径不可用或不是文件夹。请检查搜索文件夹路径。");
+            ImGui::TextColored(ImVec4(1, 0.2F, 0.2F, 1), "路径不可用或不是文件夹。请检查搜索文件夹路径。");
         }
         ImGui::EndChild();
 
@@ -569,20 +569,20 @@ int main(int argc, char** argv) {
                 } else if (type == StepType::VoxelGrid) {
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderFloat(("体素大小##" + std::to_string(i)).c_str(), &pipeline_steps[i].voxel_leaf_size,
-                                       0.001f, 0.5f, "%.3f m");
+                                       0.001F, 0.5F, "%.3f m");
                 } else if (type == StepType::StatisticalOutlier) {
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderInt(("均值K值##" + std::to_string(i)).c_str(), &pipeline_steps[i].sor_k, 1, 200);
                     ImGui::SetNextItemWidth(120);
-                    ImGui::SliderFloat(("标准差##" + std::to_string(i)).c_str(), &pipeline_steps[i].sor_std_dev, 0.1f,
-                                       5.0f, "%.2f");
+                    ImGui::SliderFloat(("标准差##" + std::to_string(i)).c_str(), &pipeline_steps[i].sor_std_dev, 0.1F,
+                                       5.0F, "%.2f");
                 } else if (type == StepType::ComputeCurvature) {
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderInt(("曲率K搜索##" + std::to_string(i)).c_str(), &pipeline_steps[i].curvature_ksearch,
                                      3, 100);
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderFloat(("曲率半径##" + std::to_string(i)).c_str(), &pipeline_steps[i].curvature_radius,
-                                       0.0f, 1.0f, "%.3f");
+                                       0.0F, 1.0F, "%.3f");
                     ImGui::TextWrapped("半径 > 0 时使用半径搜索，否则使用 KSearch。");
                 } else if (type == StepType::ShowCloud) {
                     ImGui::TextWrapped("点云显示模块");
@@ -755,13 +755,16 @@ int main(int argc, char** argv) {
             ImGui::OpenPopup("关闭确认");
         }
 
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5F, ImGui::GetIO().DisplaySize.y * 0.5F),
+                                ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
+
         if (ImGui::BeginPopupModal("关闭确认", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("确定要关闭流水线控制面板吗？");
             ImGui::Spacing();
 
-            float button_width = 120.0f;
+            float button_width = 120.0F;
             float available_width = ImGui::GetContentRegionAvail().x;
-            float offset = (available_width - 2 * button_width - ImGui::GetStyle().ItemSpacing.x) / 2.0f;
+            float offset = (available_width - 2 * button_width - ImGui::GetStyle().ItemSpacing.x) / 2.0F;
 
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset);
 

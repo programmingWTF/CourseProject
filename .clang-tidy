@@ -17,8 +17,9 @@ Checks: >-
   -readability-identifier-length,
   -readability-isolate-declaration,
   -modernize-use-trailing-return-type,
-  -google-build-using-namespace
-
+  -google-build-using-namespace,
+  -readability-magic-numbers,
+  -readability-braces-around-statements
 # 把警告视为错误（可选，初学者建议不加，否则满屏红线心态容易崩）
 # WarningsAsErrors: ''
 
