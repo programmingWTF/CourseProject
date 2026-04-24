@@ -4,7 +4,6 @@
 #include <pcl/io/ply_io.h>
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 
 namespace fs = std::filesystem;
@@ -72,6 +71,9 @@ bool PointCloudIO::save(const std::string& filename, const pcl::PointCloud<pcl::
     }
     try {
         std::string ext = get_file_extension(filename);
+        if (ext == ".bin") {
+            ext = ".pcd";
+        }
         if (ext == ".pcd") {
             pcl::io::savePCDFileASCII(filename, *cloud);
             std::cout << "Saved " << cloud->size() << " data points to " << filename << "\n";
@@ -84,19 +86,36 @@ bool PointCloudIO::save(const std::string& filename, const pcl::PointCloud<pcl::
             return true;
         }
 
+        throw std::runtime_error("Unsupported file extension for saving: " + ext);
+    } catch (const std::exception& e) {
+        std::cerr << "Error saving file " << filename << ": " << e.what() << "\n";
+        return false;
+    }
+}
+
+bool PointCloudIO::save(const std::string& filename, const pcl::PointCloud<pcl::PointNormal>::Ptr& cloud) {
+    if (!cloud || cloud->empty()) {
+        std::cerr << "Cannot save empty or null point cloud." << "\n";
+        return false;
+    }
+
+    try {
+        std::string ext = get_file_extension(filename);
         if (ext == ".bin") {
-            std::ofstream output(filename, std::ios::binary);
-            if (!output.is_open()) {
-                throw std::runtime_error("Failed to open .bin file for writing.");
-            }
-            for (const auto& point : cloud->points) {
-                float data[4] = {point.x, point.y, point.z, 0.0F};  // intensity 设为默认 0
-                output.write(reinterpret_cast<const char*>(data), sizeof(data));
-            }
-            output.close();
-            std::cout << "Saved " << cloud->size() << " data points to " << filename << "\n";
+            ext = ".pcd";
+        }
+        if (ext == ".pcd") {
+            pcl::io::savePCDFileASCII(filename, *cloud);
+            std::cout << "Saved " << cloud->size() << " feature points to " << filename << "\n";
             return true;
         }
+
+        if (ext == ".ply") {
+            pcl::io::savePLYFileASCII(filename, *cloud);
+            std::cout << "Saved " << cloud->size() << " feature points to " << filename << "\n";
+            return true;
+        }
+
         throw std::runtime_error("Unsupported file extension for saving: " + ext);
     } catch (const std::exception& e) {
         std::cerr << "Error saving file " << filename << ": " << e.what() << "\n";

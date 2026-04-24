@@ -24,6 +24,7 @@ void ProcessingLog::log(const std::string& operation, size_t original_count, siz
                     << " | Pts after: " << current_count
                     << " | Diff: " << static_cast<long long>(current_count) - static_cast<long long>(original_count)
                     << "\n";
+        log_stream_.flush();
     }
 }
 

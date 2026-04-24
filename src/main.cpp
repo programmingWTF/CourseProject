@@ -146,10 +146,6 @@ bool is_display_step(StepType type) {
     return type == StepType::ShowCloud || type == StepType::ShowNormals;
 }
 
-std::string get_file_extension(const std::string& filename) {
-    return fs::path(filename).extension().string();
-}
-
 // ================================================================
 // 文件保存辅助函数
 // ================================================================
@@ -174,8 +170,10 @@ std::string generate_output_filename(const std::string& output_folder, int step_
     if (output_folder.empty()) return "";
 
     // 获取原文件的扩展名
-    std::string ext = get_file_extension(original_filename);
-    if (ext != ".pcd" && ext != ".ply" && ext != ".bin") {
+    std::string ext = fs::path(original_filename).extension().string();
+    if (ext == ".bin") {
+        ext = ".pcd";
+    } else if (ext != ".pcd" && ext != ".ply") {
         ext = ".pcd";
     }
 
@@ -191,6 +189,50 @@ bool save_point_cloud(const std::string& filepath, const pcl::PointCloud<pcl::Po
         return false;
     }
     return PointCloudIO::save(filepath, cloud);
+}
+
+bool save_point_cloud(const std::string& filepath, const pcl::PointCloud<pcl::PointNormal>::Ptr& cloud) {
+    if (!cloud || cloud->empty()) {
+        return false;
+    }
+    return PointCloudIO::save(filepath, cloud);
+}
+
+pcl::PointCloud<pcl::PointNormal>::Ptr build_featured_point_cloud(
+    const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud, const pcl::PointCloud<pcl::Normal>::ConstPtr& normals,
+    const pcl::PointCloud<pcl::PrincipalCurvatures>::ConstPtr& curvatures,
+    const pcl::PointCloud<pcl::PointNormal>::ConstPtr& base_cloud = nullptr) {
+    pcl::PointCloud<pcl::PointNormal>::Ptr featured_cloud(new pcl::PointCloud<pcl::PointNormal>());
+    if (!cloud || cloud->empty()) {
+        return featured_cloud;
+    }
+
+    featured_cloud->reserve(cloud->size());
+    for (std::size_t i = 0; i < cloud->size(); ++i) {
+        const auto& source_point = cloud->points[i];
+        pcl::PointNormal target_point;
+        if (base_cloud && i < base_cloud->size()) {
+            target_point = base_cloud->points[i];
+        }
+        target_point.x = source_point.x;
+        target_point.y = source_point.y;
+        target_point.z = source_point.z;
+
+        if (normals && i < normals->size()) {
+            const auto& normal = normals->points[i];
+            target_point.normal_x = normal.normal_x;
+            target_point.normal_y = normal.normal_y;
+            target_point.normal_z = normal.normal_z;
+        }
+
+        if (curvatures && i < curvatures->size()) {
+            target_point.curvature = curvatures->points[i].pc1;
+        }
+
+        featured_cloud->push_back(target_point);
+    }
+
+    return featured_cloud;
 }
 
 bool setup_imgui_font(float font_pixel_size, std::string& loaded_font_path) {
@@ -244,7 +286,7 @@ PipelineStepConfig make_default_step(StepType type) {
     return step;
 }
 
-void render_display_config_ui(DisplayConfig& config, bool allow_normals_edit) {
+void render_display_config_ui(DisplayConfig& config) {
     ImGui::SliderInt("点大小", &config.point_size, 1, 8);
     ImGui::SliderInt("点云颜色 R", &config.color_r, 0, 255);
     ImGui::SliderInt("点云颜色 G", &config.color_g, 0, 255);
@@ -434,7 +476,7 @@ int main(int argc, char** argv) {
 
     int add_step_type_idx = static_cast<int>(StepType::ShowCloud);
 
-    auto logger = std::make_shared<ProcessingLog>("logs/processing_gui.log");
+    auto logger = std::make_shared<ProcessingLog>("../logs/processing_gui.log");
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -631,7 +673,7 @@ int main(int argc, char** argv) {
             "（颜色、点大小、是否显示法线、法线密度/长度、是否显示坐标轴、背景色）。");
 
         if (ImGui::CollapsingHeader("原始点云显示参数", ImGuiTreeNodeFlags_DefaultOpen)) {
-            render_display_config_ui(vis_data->original_display, false);
+            render_display_config_ui(vis_data->original_display);
         }
 
         int display_step_count = 0;
@@ -659,27 +701,66 @@ int main(int argc, char** argv) {
             int show_count = 0;
             int step_counter = 0;  // 用于文件命名
             bool has_pending_stages = false;
+            bool pending_filters = false;
+            pcl::PointCloud<pcl::PointNormal>::Ptr previous_feature_cloud(new pcl::PointCloud<pcl::PointNormal>());
+            bool previous_feature_cloud_valid = false;
+
+            auto flush_pending_pipeline = [&]() {
+                if (!has_pending_stages) {
+                    return;
+                }
+                pipeline->execute(cloud_to_process);
+                has_pending_stages = false;
+                if (pending_filters) {
+                    previous_feature_cloud_valid = false;
+                    pending_filters = false;
+                }
+            };
+
+            auto write_step_output =
+                [&](int step_number, const pcl::PointCloud<pcl::Normal>::ConstPtr& normals = nullptr,
+                    const pcl::PointCloud<pcl::PrincipalCurvatures>::ConstPtr& curvatures = nullptr) {
+                    std::string output_file = generate_output_filename(output_folder, step_number, current_file_name);
+                    if (output_file.empty()) {
+                        return;
+                    }
+                    const pcl::PointCloud<pcl::PointNormal>::ConstPtr base_cloud =
+                        previous_feature_cloud_valid ? previous_feature_cloud : nullptr;
+                    auto featured_cloud = build_featured_point_cloud(cloud_to_process, normals, curvatures, base_cloud);
+                    const bool use_feature_cloud = previous_feature_cloud_valid || normals || curvatures;
+
+                    bool saved = false;
+                    if (use_feature_cloud) {
+                        saved = save_point_cloud(output_file, featured_cloud);
+                        if (saved) {
+                            previous_feature_cloud = featured_cloud;
+                            previous_feature_cloud_valid = true;
+                        }
+                    } else {
+                        saved = save_point_cloud(output_file, cloud_to_process);
+                    }
+
+                    if (saved) {
+                        std::cout << "[INFO] Saved step " << step_number << " to " << output_file << "\n";
+                        if (logger) {
+                            logger->log("Save step " + std::to_string(step_number), cloud_to_process->size(),
+                                        cloud_to_process->size());
+                        }
+                    } else {
+                        std::cout << "[WARN] Failed to save step " << step_number << "\n";
+                    }
+                };
 
             auto capture_display_snapshot = [&](const PipelineStepConfig& step, int step_number) {
                 // 显示步骤作为断点：先把前面的滤波/特征提取执行完，再截取当前结果
-                pipeline->execute(cloud_to_process);
-                has_pending_stages = false;
-
-                if (step.save_output) {
-                    std::string output_file = generate_output_filename(output_folder, step_number, current_file_name);
-                    if (!output_file.empty()) {
-                        if (save_point_cloud(output_file, cloud_to_process)) {
-                            std::cout << "[INFO] Saved step " << step_number << " to " << output_file << "\n";
-                        } else {
-                            std::cout << "[WARN] Failed to save step " << step_number << "\n";
-                        }
-                    }
-                }
+                flush_pending_pipeline();
 
                 VisualizerData::StageSnapshot snapshot;
                 snapshot.cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*cloud_to_process);
                 snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
                 snapshot.display = step.display;
+
+                const auto curvatures = pipeline->getCurvatures();
 
                 if (snapshot.display.show_normals) {
                     auto normal_extractor = std::make_shared<NormalExtractor>(step.normal_ksearch, 0.0);
@@ -687,9 +768,13 @@ int main(int argc, char** argv) {
                     snapshot.display.normal_scale = step.normal_display_length;
                 }
 
+                if (step.save_output) {
+                    write_step_output(step_number, snapshot.display.show_normals ? snapshot.normals : nullptr,
+                                      curvatures);
+                }
+
                 ++show_count;
                 snapshot.title = "View " + std::to_string(show_count) + ": " + step_type_to_label(step.type);
-                auto curvatures = pipeline->getCurvatures();
                 if (curvatures && !curvatures->empty()) {
                     snapshot.title += " (curvature ready)";
                 }
@@ -707,27 +792,44 @@ int main(int argc, char** argv) {
                                                                       step.pass_min, step.pass_max);
                     pipeline->addStage(filter);
                     has_pending_stages = true;
+                    pending_filters = true;
+                    if (step.save_output) {
+                        flush_pending_pipeline();
+                        write_step_output(step_counter, nullptr, nullptr);
+                        pipeline = std::make_shared<PointCloudPipeline>(logger);
+                    }
                 } else if (step.type == StepType::VoxelGrid) {
                     auto filter = std::make_shared<VoxelGridFilter>(step.voxel_leaf_size);
                     pipeline->addStage(filter);
                     has_pending_stages = true;
+                    pending_filters = true;
+                    if (step.save_output) {
+                        flush_pending_pipeline();
+                        write_step_output(step_counter, nullptr, nullptr);
+                        pipeline = std::make_shared<PointCloudPipeline>(logger);
+                    }
                 } else if (step.type == StepType::StatisticalOutlier) {
                     auto filter = std::make_shared<StatisticalOutlierFilter>(step.sor_k, step.sor_std_dev);
                     pipeline->addStage(filter);
                     has_pending_stages = true;
+                    pending_filters = true;
+                    if (step.save_output) {
+                        flush_pending_pipeline();
+                        write_step_output(step_counter, nullptr, nullptr);
+                        pipeline = std::make_shared<PointCloudPipeline>(logger);
+                    }
                 } else if (step.type == StepType::ComputeCurvature) {
                     auto curvature_extractor = std::make_shared<CurvatureExtractor>(
                         step.curvature_ksearch, static_cast<double>(step.curvature_radius));
                     pipeline->setCurvatureExtractor(curvature_extractor);
                     has_pending_stages = true;
+                    if (step.save_output) {
+                        flush_pending_pipeline();
+                        write_step_output(step_counter, nullptr, pipeline->getCurvatures());
+                        pipeline = std::make_shared<PointCloudPipeline>(logger);
+                    }
                 } else if (is_display_step(step.type)) {
                     capture_display_snapshot(step, step_counter);
-                } else {
-                    // 非显示步骤但需要保存时，仍需要在此处理
-                    if (step.type != StepType::PassThrough && step.type != StepType::VoxelGrid &&
-                        step.type != StepType::StatisticalOutlier && step.type != StepType::ComputeCurvature) {
-                        // 其他类型不需要保存
-                    }
                 }
             }
 
