@@ -20,6 +20,13 @@
 - `data/` : 测试点云数据（默认搜索路径 `../data`）
 - `logs/processing_gui.log` : 处理日志
 
+## 测试数据说明
+
+- `data/0000000000.bin`：二进制点云样例，用于验证 `.bin` 读取与保存流程。
+- `data/bun_zipper.ply`：经典 Bunny 模型，适合检查点云加载、滤波和法线显示效果。
+- `data/dragonStandRight_336.ply`：更复杂的 PLY 模型，适合做多步骤流水线对比。
+- `data/output/`：程序运行后生成的结果目录，不建议手动覆盖。
+
 ## 依赖
 
 - CMake >= 3.10
@@ -57,3 +64,4 @@ cmake --build build --config Release
 - 如果 GUI 中中文显示为问号，检查是否加载到中文字体（程序会尝试寻找系统字体）。
 - 点云加载失败：确认 `搜索文件夹` 路径正确，或在 `data/` 中放入测试文件。
 - 若在构建时遇到找不到 PCL/GLFW，请确认 vcpkg 已安装对应包并在 CMake 调用中使用 `-DCMAKE_TOOLCHAIN_FILE` 指向 vcpkg 的 toolchain 文件。
+- `FeatureBase<PointInT, FeatureOutT>` 当前以 `PointXYZ` 为主，但模板接口本身已经保留了扩展到 `PointXYZRGB`、`PointXYZI` 等点类型的空间。

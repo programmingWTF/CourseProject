@@ -3,11 +3,12 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
-#include <memory>
-
 template <typename PointInT, typename FeatureOutT>
 class FeatureBase {
 public:
+    using InputPointType = PointInT;
+    using OutputFeatureType = FeatureOutT;
+
     using PointCloudIn = pcl::PointCloud<PointInT>;
     using PointCloudInPtr = typename PointCloudIn::Ptr;
 
