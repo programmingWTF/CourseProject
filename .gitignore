@@ -3,3 +3,5 @@ compile_commands.json
 .vscode/
 logs/*
 !logs/.gitkeep
+data/output/*
+!data/output/.gitkeep

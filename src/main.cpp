@@ -184,20 +184,6 @@ std::string generate_output_filename(const std::string& output_folder, int step_
     return std::string(filename);
 }
 
-bool save_point_cloud(const std::string& filepath, const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
-    if (!cloud || cloud->empty()) {
-        return false;
-    }
-    return PointCloudIO::save(filepath, cloud);
-}
-
-bool save_point_cloud(const std::string& filepath, const pcl::PointCloud<pcl::PointNormal>::Ptr& cloud) {
-    if (!cloud || cloud->empty()) {
-        return false;
-    }
-    return PointCloudIO::save(filepath, cloud);
-}
-
 pcl::PointCloud<pcl::PointNormal>::Ptr build_featured_point_cloud(
     const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud, const pcl::PointCloud<pcl::Normal>::ConstPtr& normals,
     const pcl::PointCloud<pcl::PrincipalCurvatures>::ConstPtr& curvatures,
@@ -422,9 +408,7 @@ static void glfw_window_close_callback(GLFWwindow* window) {
 // ================================================================
 // 主函数：ImGui 线程
 // ================================================================
-int main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+int main() {
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;
@@ -731,13 +715,13 @@ int main(int argc, char** argv) {
 
                     bool saved = false;
                     if (use_feature_cloud) {
-                        saved = save_point_cloud(output_file, featured_cloud);
+                        saved = PointCloudIO::save(output_file, featured_cloud);
                         if (saved) {
                             previous_feature_cloud = featured_cloud;
                             previous_feature_cloud_valid = true;
                         }
                     } else {
-                        saved = save_point_cloud(output_file, cloud_to_process);
+                        saved = PointCloudIO::save(output_file, cloud_to_process);
                     }
 
                     if (saved) {
