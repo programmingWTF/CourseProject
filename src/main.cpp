@@ -152,16 +152,12 @@ bool is_display_step(StepType type) {
 std::string get_output_folder(const std::string& original_file_path) {
     if (original_file_path.empty()) return "";
 
-    // 获取原文件所在目录
-    size_t last_slash = original_file_path.find_last_of("\\/");
-    std::string dir = (last_slash != std::string::npos) ? original_file_path.substr(0, last_slash) : ".";
+    // 在原文件所在目录下创建 output 子文件夹
+    std::string dir = fs::path(original_file_path).parent_path().string();
+    if (dir.empty()) dir = ".";
 
-    // 创建output文件夹路径
     std::string output_dir = dir + "/output";
-
-    // 如果output文件夹不存在，创建它
     fs::create_directories(output_dir);
-
     return output_dir;
 }
 
@@ -184,10 +180,13 @@ std::string generate_output_filename(const std::string& output_folder, int step_
     return std::string(filename);
 }
 
+// 将 XYZ 点云与法线/曲率特征合并为 PointNormal 格式。
+// prev_featured_cloud: 先前保存过的特征云，用于累积之前计算过的特征数据。
+// 注意：prev_featured_cloud 只在点索引一致的场景下有效（即流水线中未插入滤波步骤）。
 pcl::PointCloud<pcl::PointNormal>::Ptr build_featured_point_cloud(
     const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud, const pcl::PointCloud<pcl::Normal>::ConstPtr& normals,
     const pcl::PointCloud<pcl::PrincipalCurvatures>::ConstPtr& curvatures,
-    const pcl::PointCloud<pcl::PointNormal>::ConstPtr& base_cloud = nullptr) {
+    const pcl::PointCloud<pcl::PointNormal>::ConstPtr& prev_featured_cloud = nullptr) {
     pcl::PointCloud<pcl::PointNormal>::Ptr featured_cloud(new pcl::PointCloud<pcl::PointNormal>());
     if (!cloud || cloud->empty()) {
         return featured_cloud;
@@ -197,18 +196,18 @@ pcl::PointCloud<pcl::PointNormal>::Ptr build_featured_point_cloud(
     for (std::size_t i = 0; i < cloud->size(); ++i) {
         const auto& source_point = cloud->points[i];
         pcl::PointNormal target_point;
-        if (base_cloud && i < base_cloud->size()) {
-            target_point = base_cloud->points[i];
+        // 如果有先前特征云且索引匹配，先拷贝它（包含历史法线/曲率），再覆盖最新的数据
+        if (prev_featured_cloud && i < prev_featured_cloud->size()) {
+            target_point = prev_featured_cloud->points[i];
         }
         target_point.x = source_point.x;
         target_point.y = source_point.y;
         target_point.z = source_point.z;
 
         if (normals && i < normals->size()) {
-            const auto& normal = normals->points[i];
-            target_point.normal_x = normal.normal_x;
-            target_point.normal_y = normal.normal_y;
-            target_point.normal_z = normal.normal_z;
+            target_point.normal_x = normals->points[i].normal_x;
+            target_point.normal_y = normals->points[i].normal_y;
+            target_point.normal_z = normals->points[i].normal_z;
         }
 
         if (curvatures && i < curvatures->size()) {
@@ -409,7 +408,6 @@ static void glfw_window_close_callback(GLFWwindow* window) {
 // 主函数：ImGui 线程
 // ================================================================
 int main() {
-
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;
 
@@ -683,21 +681,26 @@ int main() {
             auto pipeline = std::make_shared<PointCloudPipeline>(logger);
 
             int show_count = 0;
-            int step_counter = 0;  // 用于文件命名
+            int step_counter = 0;
             bool has_pending_stages = false;
-            bool pending_filters = false;
+            // 标记当前 pipeline 中是否有滤波步骤。滤波会移除/改变点云索引，
+            // 使得之前保存的 feature cloud（含法线/曲率数据）与新点云的点索引不匹配，
+            // 因此在 flush 执行后必须废弃 previous_feature_cloud。
+            bool filters_pending_in_pipeline = false;
             pcl::PointCloud<pcl::PointNormal>::Ptr previous_feature_cloud(new pcl::PointCloud<pcl::PointNormal>());
             bool previous_feature_cloud_valid = false;
 
+            // 刷新：将累积的 pipeline 步骤（滤波+特征提取）执行到 cloud_to_process 上
             auto flush_pending_pipeline = [&]() {
                 if (!has_pending_stages) {
                     return;
                 }
                 pipeline->execute(cloud_to_process);
                 has_pending_stages = false;
-                if (pending_filters) {
+                // 如果有滤波步骤执行过，点索引已改变，废弃旧的 feature cloud
+                if (filters_pending_in_pipeline) {
                     previous_feature_cloud_valid = false;
-                    pending_filters = false;
+                    filters_pending_in_pipeline = false;
                 }
             };
 
@@ -708,20 +711,20 @@ int main() {
                     if (output_file.empty()) {
                         return;
                     }
-                    const pcl::PointCloud<pcl::PointNormal>::ConstPtr base_cloud =
+                    const pcl::PointCloud<pcl::PointNormal>::ConstPtr prev_cloud =
                         previous_feature_cloud_valid ? previous_feature_cloud : nullptr;
-                    auto featured_cloud = build_featured_point_cloud(cloud_to_process, normals, curvatures, base_cloud);
+                    auto featured_cloud = build_featured_point_cloud(cloud_to_process, normals, curvatures, prev_cloud);
                     const bool use_feature_cloud = previous_feature_cloud_valid || normals || curvatures;
 
                     bool saved = false;
                     if (use_feature_cloud) {
-                        saved = PointCloudIO::save(output_file, featured_cloud);
+                        saved = PointCloudIO::save(output_file, *featured_cloud);
                         if (saved) {
                             previous_feature_cloud = featured_cloud;
                             previous_feature_cloud_valid = true;
                         }
                     } else {
-                        saved = PointCloudIO::save(output_file, cloud_to_process);
+                        saved = PointCloudIO::save(output_file, *cloud_to_process);
                     }
 
                     if (saved) {
@@ -744,17 +747,18 @@ int main() {
                 snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
                 snapshot.display = step.display;
 
+                const auto normals = pipeline->getNormals();
                 const auto curvatures = pipeline->getCurvatures();
 
-                if (snapshot.display.show_normals) {
-                    auto normal_extractor = std::make_shared<NormalExtractor>(step.normal_ksearch, 0.0);
-                    snapshot.normals = normal_extractor->extract(cloud_to_process);
+                if (snapshot.display.show_normals && normals && !normals->empty()) {
+                    snapshot.normals = normals;
                     snapshot.display.normal_scale = step.normal_display_length;
                 }
 
                 if (step.save_output) {
-                    write_step_output(step_number, snapshot.display.show_normals ? snapshot.normals : nullptr,
-                                      curvatures);
+                    const pcl::PointCloud<pcl::Normal>::ConstPtr normals_for_save =
+                        (snapshot.display.show_normals && normals && !normals->empty()) ? normals : nullptr;
+                    write_step_output(step_number, normals_for_save, curvatures);
                 }
 
                 ++show_count;
@@ -771,14 +775,16 @@ int main() {
                 ++step_counter;
 
                 // 为过滤和特征提取步骤添加到Pipeline
+                // 滤波步骤：添加到 pipeline，标记 filters_pending_in_pipeline
+                // 以便后续 flush 时废弃旧的 feature cloud
                 if (step.type == StepType::PassThrough) {
                     auto filter = std::make_shared<PassThroughFilter>(axis_idx_to_field(step.pass_axis_idx),
                                                                       step.pass_min, step.pass_max);
                     pipeline->addStage(filter);
                     has_pending_stages = true;
-                    pending_filters = true;
+                    filters_pending_in_pipeline = true;
                     if (step.save_output) {
-                        flush_pending_pipeline();
+                        flush_pending_pipeline();  // 此 flush 会因 filters_pending 而废弃 previous_feature_cloud
                         write_step_output(step_counter, nullptr, nullptr);
                         pipeline = std::make_shared<PointCloudPipeline>(logger);
                     }
@@ -786,7 +792,7 @@ int main() {
                     auto filter = std::make_shared<VoxelGridFilter>(step.voxel_leaf_size);
                     pipeline->addStage(filter);
                     has_pending_stages = true;
-                    pending_filters = true;
+                    filters_pending_in_pipeline = true;
                     if (step.save_output) {
                         flush_pending_pipeline();
                         write_step_output(step_counter, nullptr, nullptr);
@@ -796,7 +802,7 @@ int main() {
                     auto filter = std::make_shared<StatisticalOutlierFilter>(step.sor_k, step.sor_std_dev);
                     pipeline->addStage(filter);
                     has_pending_stages = true;
-                    pending_filters = true;
+                    filters_pending_in_pipeline = true;
                     if (step.save_output) {
                         flush_pending_pipeline();
                         write_step_output(step_counter, nullptr, nullptr);
@@ -812,6 +818,11 @@ int main() {
                         write_step_output(step_counter, nullptr, pipeline->getCurvatures());
                         pipeline = std::make_shared<PointCloudPipeline>(logger);
                     }
+                } else if (step.type == StepType::ShowNormals) {
+                    auto normal_extractor = std::make_shared<NormalExtractor>(step.normal_ksearch, 0.0);
+                    pipeline->setNormalExtractor(normal_extractor);
+                    has_pending_stages = true;
+                    capture_display_snapshot(step, step_counter);
                 } else if (is_display_step(step.type)) {
                     capture_display_snapshot(step, step_counter);
                 }
