@@ -37,6 +37,7 @@ struct DisplayConfig {
 
     bool show_coordinate_axis = false;
     float axis_scale = 0.10F;
+    float axis_line_width = 2.0F;
 
     float background_r = 0.10F;
     float background_g = 0.10F;
@@ -280,6 +281,7 @@ void render_display_config_ui(DisplayConfig& config) {
     ImGui::Checkbox("显示坐标轴", &config.show_coordinate_axis);
     if (config.show_coordinate_axis) {
         ImGui::SliderFloat("坐标轴缩放", &config.axis_scale, 0.02F, 1.0F, "%.2F");
+        ImGui::SliderFloat("坐标轴线宽", &config.axis_line_width, 1.0F, 10.0F, "%.1F");
     }
 
     ImGui::SliderFloat("背景颜色 R", &config.background_r, 0.0F, 1.0F, "%.2F");
@@ -324,6 +326,8 @@ void build_viewer_scene(const pcl::visualization::PCLVisualizer::Ptr& viewer,
 
         if (display.show_coordinate_axis) {
             viewer->addCoordinateSystem(display.axis_scale, axis_id, viewport_id);
+            viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,
+                                                static_cast<double>(display.axis_line_width), axis_id, viewport_id);
         }
 
         if (cloud_to_show && !cloud_to_show->empty()) {
@@ -611,7 +615,7 @@ int main() {
                     ImGui::TextWrapped("半径 > 0 时使用半径搜索，否则使用 KSearch。");
                 } else if (type == StepType::ShowCloud) {
                     ImGui::TextWrapped("点云显示模块");
-                    ImGui::TextWrapped("颜色/点大小等在下方显示参数区。");
+                    render_display_config_ui(pipeline_steps[i].display);
                 } else if (type == StepType::ShowNormals) {
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderInt(("法线K搜索##" + std::to_string(i)).c_str(), &pipeline_steps[i].normal_ksearch, 3,
@@ -622,6 +626,7 @@ int main() {
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderInt(("法线密度##" + std::to_string(i)).c_str(),
                                      &pipeline_steps[i].display.normal_level, 1, 100);
+                    render_display_config_ui(pipeline_steps[i].display);
                 }
 
                 ImGui::Spacing();
