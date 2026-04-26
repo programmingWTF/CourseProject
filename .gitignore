@@ -1,6 +1,7 @@
 build/
 compile_commands.json
 .vscode/
+imgui.ini
 logs/*
 !logs/.gitkeep
 data/output/*

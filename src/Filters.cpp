@@ -1,5 +1,18 @@
 #include "Filters.hpp"
 
+namespace {
+
+/// 抽取 PCL 滤波器的公共模式：setInputCloud → filter → 替换指针
+template <typename PclFilter>
+void apply_pcl_filter(PclFilter& pcl_filter, pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
+    pcl_filter.setInputCloud(cloud);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl_filter.filter(*filtered_cloud);
+    cloud = filtered_cloud;
+}
+
+}  // namespace
+
 // PassThroughFilter
 PassThroughFilter::PassThroughFilter(const std::string& field_name, float limit_min, float limit_max)
     : field_name_(field_name), limit_min_(limit_min), limit_max_(limit_max) {}
@@ -11,13 +24,9 @@ std::string PassThroughFilter::getName() const {
 void PassThroughFilter::apply(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     if (!cloud || cloud->empty()) return;
     pcl::PassThrough<pcl::PointXYZ> pass;
-    pass.setInputCloud(cloud);
     pass.setFilterFieldName(field_name_);
     pass.setFilterLimits(limit_min_, limit_max_);
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    pass.filter(*filtered_cloud);
-    cloud = filtered_cloud;  // 更新指针
+    apply_pcl_filter(pass, cloud);
 }
 
 // VoxelGridFilter
@@ -30,12 +39,8 @@ std::string VoxelGridFilter::getName() const {
 void VoxelGridFilter::apply(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     if (!cloud || cloud->empty()) return;
     pcl::VoxelGrid<pcl::PointXYZ> voxel;
-    voxel.setInputCloud(cloud);
     voxel.setLeafSize(leaf_size_, leaf_size_, leaf_size_);
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    voxel.filter(*filtered_cloud);
-    cloud = filtered_cloud;
+    apply_pcl_filter(voxel, cloud);
 }
 
 // StatisticalOutlierFilter
@@ -49,11 +54,7 @@ std::string StatisticalOutlierFilter::getName() const {
 void StatisticalOutlierFilter::apply(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     if (!cloud || cloud->empty()) return;
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
-    sor.setInputCloud(cloud);
     sor.setMeanK(mean_k_);
     sor.setStddevMulThresh(std_dev_mul_thresh_);
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    sor.filter(*filtered_cloud);
-    cloud = filtered_cloud;
+    apply_pcl_filter(sor, cloud);
 }

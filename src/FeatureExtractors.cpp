@@ -28,9 +28,23 @@ NormalExtractor::FeatureCloudOutPtr NormalExtractor::extract(const PointCloudInP
 CurvatureExtractor::CurvatureExtractor(int k_neighbors, double search_radius)
     : k_neighbors_(k_neighbors), search_radius_(search_radius) {}
 
+void CurvatureExtractor::setInputNormals(pcl::PointCloud<pcl::Normal>::ConstPtr normals) {
+    input_normals_ = normals;
+}
+
 CurvatureExtractor::FeatureCloudOutPtr CurvatureExtractor::extract(const PointCloudInPtr& input) {
-    NormalExtractor ne(k_neighbors_, search_radius_);
-    auto normals = ne.extract(input);
+    pcl::PointCloud<pcl::Normal>::ConstPtr normals;
+    pcl::PointCloud<pcl::Normal>::Ptr computed_normals;
+
+    // 如果有外部传入的法线，直接复用，避免重复计算
+    if (input_normals_ && !input_normals_->empty()) {
+        normals = input_normals_;
+        input_normals_.reset();  // 单次消费
+    } else {
+        NormalExtractor ne(k_neighbors_, search_radius_);
+        computed_normals = ne.extract(input);
+        normals = computed_normals;
+    }
 
     pcl::PrincipalCurvaturesEstimation<pcl::PointXYZ, pcl::Normal, pcl::PrincipalCurvatures> pc_est;
     pc_est.setInputCloud(input);

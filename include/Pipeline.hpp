@@ -1,4 +1,5 @@
 #pragma once
+#include <cassert>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,4 +30,6 @@ private:
 
     pcl::PointCloud<pcl::Normal>::Ptr normals_;
     pcl::PointCloud<pcl::PrincipalCurvatures>::Ptr curvatures_;
+
+    bool executed_ = false;  // 标记 execute() 是否已被调用过
 };

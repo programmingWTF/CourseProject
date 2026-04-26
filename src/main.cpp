@@ -8,11 +8,12 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -174,11 +175,10 @@ std::string generate_output_filename(const std::string& output_folder, int step_
         ext = ".pcd";
     }
 
-    // 生成文件名：output_folder/filename_XN.ext
-    // 例如：output/cloud_01.pcd, output/cloud_02.ply
-    char filename[512];
-    snprintf(filename, sizeof(filename), "%s/cloud_%02d%s", output_folder.c_str(), step_number, ext.c_str());
-    return std::string(filename);
+    // 生成文件名：output_folder/cloud_XN.ext
+    std::ostringstream oss;
+    oss << output_folder << "/cloud_" << std::setw(2) << std::setfill('0') << step_number << ext;
+    return oss.str();
 }
 
 // 将 XYZ 点云与法线/曲率特征合并为 PointNormal 格式。
@@ -409,6 +409,185 @@ static void glfw_window_close_callback(GLFWwindow* window) {
 }
 
 // ================================================================
+// 流水线执行引擎
+// ================================================================
+
+/// 执行流水线的上下文
+struct PipelineExecContext {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud;  // 会被滤波步骤原地修改
+    const std::string& output_folder;
+    const std::string& current_file_name;
+    std::shared_ptr<ProcessingLog> logger;
+};
+
+/// 执行流水线的结果
+struct PipelineExecResult {
+    std::vector<VisualizerData::StageSnapshot> snapshots;
+    size_t original_count = 0;
+    size_t final_count = 0;
+};
+
+PipelineExecResult execute_pipeline_steps(const std::vector<PipelineStepConfig>& steps, PipelineExecContext& ctx) {
+    PipelineExecResult result;
+    result.original_count = ctx.cloud->size();
+
+    auto pipeline = std::make_shared<PointCloudPipeline>(ctx.logger);
+
+    int show_count = 0;
+    int step_counter = 0;
+    bool has_pending_stages = false;
+    bool filters_pending_in_pipeline = false;
+    pcl::PointCloud<pcl::PointNormal>::Ptr previous_feature_cloud(new pcl::PointCloud<pcl::PointNormal>());
+    bool previous_feature_cloud_valid = false;
+
+    auto flush_pending_pipeline = [&]() {
+        if (!has_pending_stages) return;
+        pipeline->execute(ctx.cloud);
+        has_pending_stages = false;
+        if (filters_pending_in_pipeline) {
+            previous_feature_cloud_valid = false;
+            filters_pending_in_pipeline = false;
+        }
+    };
+
+    auto write_step_output =
+        [&](int step_number, const pcl::PointCloud<pcl::Normal>::ConstPtr& normals = nullptr,
+            const pcl::PointCloud<pcl::PrincipalCurvatures>::ConstPtr& curvatures = nullptr) {
+            std::string output_file =
+                generate_output_filename(ctx.output_folder, step_number, ctx.current_file_name);
+            if (output_file.empty()) return;
+
+            const pcl::PointCloud<pcl::PointNormal>::ConstPtr prev_cloud =
+                previous_feature_cloud_valid ? previous_feature_cloud : nullptr;
+            auto featured_cloud =
+                build_featured_point_cloud(ctx.cloud, normals, curvatures, prev_cloud);
+            const bool use_feature_cloud = previous_feature_cloud_valid || normals || curvatures;
+
+            bool saved = false;
+            if (use_feature_cloud) {
+                saved = PointCloudIO::save(output_file, *featured_cloud);
+                if (saved) {
+                    previous_feature_cloud = featured_cloud;
+                    previous_feature_cloud_valid = true;
+                }
+            } else {
+                saved = PointCloudIO::save(output_file, *ctx.cloud);
+            }
+
+            if (saved) {
+                std::cout << "[INFO] Saved step " << step_number << " to " << output_file << "\n";
+                if (ctx.logger) {
+                    ctx.logger->log("Save step " + std::to_string(step_number), ctx.cloud->size(), ctx.cloud->size());
+                }
+            } else {
+                std::cout << "[WARN] Failed to save step " << step_number << "\n";
+            }
+        };
+
+    auto capture_display_snapshot = [&](const PipelineStepConfig& step, int step_number) {
+        flush_pending_pipeline();
+
+        VisualizerData::StageSnapshot snapshot;
+        snapshot.cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*ctx.cloud);
+        snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
+        snapshot.display = step.display;
+
+        const auto normals = pipeline->getNormals();
+        const auto curvatures = pipeline->getCurvatures();
+
+        if (snapshot.display.show_normals && normals && !normals->empty()) {
+            snapshot.normals = normals;
+            snapshot.display.normal_scale = step.normal_display_length;
+        }
+
+        if (step.save_output) {
+            const pcl::PointCloud<pcl::Normal>::ConstPtr normals_for_save =
+                (snapshot.display.show_normals && normals && !normals->empty()) ? normals : nullptr;
+            write_step_output(step_number, normals_for_save, curvatures);
+        }
+
+        ++show_count;
+        snapshot.title = "View " + std::to_string(show_count) + ": " + step_type_to_label(step.type);
+        if (curvatures && !curvatures->empty()) {
+            snapshot.title += " (curvature ready)";
+        }
+
+        result.snapshots.push_back(snapshot);
+        pipeline = std::make_shared<PointCloudPipeline>(ctx.logger);
+    };
+
+    for (const auto& step : steps) {
+        ++step_counter;
+
+        if (step.type == StepType::PassThrough) {
+            auto filter = std::make_shared<PassThroughFilter>(axis_idx_to_field(step.pass_axis_idx),
+                                                              step.pass_min, step.pass_max);
+            pipeline->addStage(filter);
+            has_pending_stages = true;
+            filters_pending_in_pipeline = true;
+            if (step.save_output) {
+                flush_pending_pipeline();
+                write_step_output(step_counter);
+                pipeline = std::make_shared<PointCloudPipeline>(ctx.logger);
+            }
+        } else if (step.type == StepType::VoxelGrid) {
+            auto filter = std::make_shared<VoxelGridFilter>(step.voxel_leaf_size);
+            pipeline->addStage(filter);
+            has_pending_stages = true;
+            filters_pending_in_pipeline = true;
+            if (step.save_output) {
+                flush_pending_pipeline();
+                write_step_output(step_counter);
+                pipeline = std::make_shared<PointCloudPipeline>(ctx.logger);
+            }
+        } else if (step.type == StepType::StatisticalOutlier) {
+            auto filter = std::make_shared<StatisticalOutlierFilter>(step.sor_k, step.sor_std_dev);
+            pipeline->addStage(filter);
+            has_pending_stages = true;
+            filters_pending_in_pipeline = true;
+            if (step.save_output) {
+                flush_pending_pipeline();
+                write_step_output(step_counter);
+                pipeline = std::make_shared<PointCloudPipeline>(ctx.logger);
+            }
+        } else if (step.type == StepType::ComputeCurvature) {
+            auto curvature_extractor =
+                std::make_shared<CurvatureExtractor>(step.curvature_ksearch, static_cast<double>(step.curvature_radius));
+            pipeline->setCurvatureExtractor(curvature_extractor);
+            has_pending_stages = true;
+            if (step.save_output) {
+                flush_pending_pipeline();
+                write_step_output(step_counter, nullptr, pipeline->getCurvatures());
+                pipeline = std::make_shared<PointCloudPipeline>(ctx.logger);
+            }
+        } else if (step.type == StepType::ShowNormals) {
+            auto normal_extractor = std::make_shared<NormalExtractor>(step.normal_ksearch, 0.0);
+            pipeline->setNormalExtractor(normal_extractor);
+            has_pending_stages = true;
+            capture_display_snapshot(step, step_counter);
+        } else if (is_display_step(step.type)) {
+            capture_display_snapshot(step, step_counter);
+        }
+    }
+
+    if (has_pending_stages) {
+        pipeline->execute(ctx.cloud);
+    }
+
+    if (result.snapshots.empty()) {
+        VisualizerData::StageSnapshot final_snapshot;
+        final_snapshot.title = "View 1: Final Result";
+        final_snapshot.cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*ctx.cloud);
+        final_snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
+        final_snapshot.display = make_default_step(StepType::ShowCloud).display;
+        result.snapshots.push_back(final_snapshot);
+    }
+
+    result.final_count = ctx.cloud->size();
+    return result;
+}
+
+// ================================================================
 // 主函数：ImGui 线程
 // ================================================================
 int main() {
@@ -452,7 +631,7 @@ int main() {
     std::string current_file_name;
     std::string current_file_path;
 
-    char search_dir[512] = "./";
+    char search_dir[512] = "../data";
 
     std::vector<PipelineStepConfig> pipeline_steps = {
         make_default_step(StepType::PassThrough),      make_default_step(StepType::VoxelGrid),
@@ -579,6 +758,7 @@ int main() {
                     ImGui::EndChild();
                     ImGui::PopID();
                     ImGui::NextColumn();
+                    --i;  // 删除后前移索引，避免跳过移位到当前位置的步骤
                     continue;
                 }
 
@@ -595,6 +775,9 @@ int main() {
                     ImGui::SetNextItemWidth(200);
                     ImGui::DragFloatRange2(("最小/最大##" + std::to_string(i)).c_str(), &pipeline_steps[i].pass_min,
                                            &pipeline_steps[i].pass_max, 0.2f, -200.0f, 200.0f);
+                    if (pipeline_steps[i].pass_min >= pipeline_steps[i].pass_max) {
+                        ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "⚠ 最小值 >= 最大值，滤波结果可能为空！");
+                    }
                 } else if (type == StepType::VoxelGrid) {
                     ImGui::SetNextItemWidth(120);
                     ImGui::SliderFloat(("体素大小##" + std::to_string(i)).c_str(), &pipeline_steps[i].voxel_leaf_size,
@@ -660,7 +843,10 @@ int main() {
             "（颜色、点大小、是否显示法线、法线密度/长度、是否显示坐标轴、背景色）。");
 
         if (ImGui::CollapsingHeader("原始点云显示参数", ImGuiTreeNodeFlags_DefaultOpen)) {
-            render_display_config_ui(vis_data->original_display);
+            {
+                std::lock_guard<std::mutex> lock(vis_data->mutex);
+                render_display_config_ui(vis_data->original_display);
+            }
         }
 
         int display_step_count = 0;
@@ -677,179 +863,14 @@ int main() {
             auto cloud_to_process = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*vis_data->cloud_original);
             vis_data->stage_snapshots.clear();
 
-            // 获取输出文件夹路径
-            std::string output_folder = get_output_folder(current_file_path);
+            PipelineExecContext exec_ctx{cloud_to_process, get_output_folder(current_file_path),
+                                         current_file_name, logger};
+            PipelineExecResult exec_result = execute_pipeline_steps(pipeline_steps, exec_ctx);
 
-            // ============================================
-            // 使用Pipeline类来构建和执行流水线处理
-            // ============================================
-            auto pipeline = std::make_shared<PointCloudPipeline>(logger);
-
-            int show_count = 0;
-            int step_counter = 0;
-            bool has_pending_stages = false;
-            // 标记当前 pipeline 中是否有滤波步骤。滤波会移除/改变点云索引，
-            // 使得之前保存的 feature cloud（含法线/曲率数据）与新点云的点索引不匹配，
-            // 因此在 flush 执行后必须废弃 previous_feature_cloud。
-            bool filters_pending_in_pipeline = false;
-            pcl::PointCloud<pcl::PointNormal>::Ptr previous_feature_cloud(new pcl::PointCloud<pcl::PointNormal>());
-            bool previous_feature_cloud_valid = false;
-
-            // 刷新：将累积的 pipeline 步骤（滤波+特征提取）执行到 cloud_to_process 上
-            auto flush_pending_pipeline = [&]() {
-                if (!has_pending_stages) {
-                    return;
-                }
-                pipeline->execute(cloud_to_process);
-                has_pending_stages = false;
-                // 如果有滤波步骤执行过，点索引已改变，废弃旧的 feature cloud
-                if (filters_pending_in_pipeline) {
-                    previous_feature_cloud_valid = false;
-                    filters_pending_in_pipeline = false;
-                }
-            };
-
-            auto write_step_output =
-                [&](int step_number, const pcl::PointCloud<pcl::Normal>::ConstPtr& normals = nullptr,
-                    const pcl::PointCloud<pcl::PrincipalCurvatures>::ConstPtr& curvatures = nullptr) {
-                    std::string output_file = generate_output_filename(output_folder, step_number, current_file_name);
-                    if (output_file.empty()) {
-                        return;
-                    }
-                    const pcl::PointCloud<pcl::PointNormal>::ConstPtr prev_cloud =
-                        previous_feature_cloud_valid ? previous_feature_cloud : nullptr;
-                    auto featured_cloud = build_featured_point_cloud(cloud_to_process, normals, curvatures, prev_cloud);
-                    const bool use_feature_cloud = previous_feature_cloud_valid || normals || curvatures;
-
-                    bool saved = false;
-                    if (use_feature_cloud) {
-                        saved = PointCloudIO::save(output_file, *featured_cloud);
-                        if (saved) {
-                            previous_feature_cloud = featured_cloud;
-                            previous_feature_cloud_valid = true;
-                        }
-                    } else {
-                        saved = PointCloudIO::save(output_file, *cloud_to_process);
-                    }
-
-                    if (saved) {
-                        std::cout << "[INFO] Saved step " << step_number << " to " << output_file << "\n";
-                        if (logger) {
-                            logger->log("Save step " + std::to_string(step_number), cloud_to_process->size(),
-                                        cloud_to_process->size());
-                        }
-                    } else {
-                        std::cout << "[WARN] Failed to save step " << step_number << "\n";
-                    }
-                };
-
-            auto capture_display_snapshot = [&](const PipelineStepConfig& step, int step_number) {
-                // 显示步骤作为断点：先把前面的滤波/特征提取执行完，再截取当前结果
-                flush_pending_pipeline();
-
-                VisualizerData::StageSnapshot snapshot;
-                snapshot.cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*cloud_to_process);
-                snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
-                snapshot.display = step.display;
-
-                const auto normals = pipeline->getNormals();
-                const auto curvatures = pipeline->getCurvatures();
-
-                if (snapshot.display.show_normals && normals && !normals->empty()) {
-                    snapshot.normals = normals;
-                    snapshot.display.normal_scale = step.normal_display_length;
-                }
-
-                if (step.save_output) {
-                    const pcl::PointCloud<pcl::Normal>::ConstPtr normals_for_save =
-                        (snapshot.display.show_normals && normals && !normals->empty()) ? normals : nullptr;
-                    write_step_output(step_number, normals_for_save, curvatures);
-                }
-
-                ++show_count;
-                snapshot.title = "View " + std::to_string(show_count) + ": " + step_type_to_label(step.type);
-                if (curvatures && !curvatures->empty()) {
-                    snapshot.title += " (curvature ready)";
-                }
-
-                vis_data->stage_snapshots.push_back(snapshot);
-                pipeline = std::make_shared<PointCloudPipeline>(logger);
-            };
-
-            for (const auto& step : pipeline_steps) {
-                ++step_counter;
-
-                // 为过滤和特征提取步骤添加到Pipeline
-                // 滤波步骤：添加到 pipeline，标记 filters_pending_in_pipeline
-                // 以便后续 flush 时废弃旧的 feature cloud
-                if (step.type == StepType::PassThrough) {
-                    auto filter = std::make_shared<PassThroughFilter>(axis_idx_to_field(step.pass_axis_idx),
-                                                                      step.pass_min, step.pass_max);
-                    pipeline->addStage(filter);
-                    has_pending_stages = true;
-                    filters_pending_in_pipeline = true;
-                    if (step.save_output) {
-                        flush_pending_pipeline();  // 此 flush 会因 filters_pending 而废弃 previous_feature_cloud
-                        write_step_output(step_counter, nullptr, nullptr);
-                        pipeline = std::make_shared<PointCloudPipeline>(logger);
-                    }
-                } else if (step.type == StepType::VoxelGrid) {
-                    auto filter = std::make_shared<VoxelGridFilter>(step.voxel_leaf_size);
-                    pipeline->addStage(filter);
-                    has_pending_stages = true;
-                    filters_pending_in_pipeline = true;
-                    if (step.save_output) {
-                        flush_pending_pipeline();
-                        write_step_output(step_counter, nullptr, nullptr);
-                        pipeline = std::make_shared<PointCloudPipeline>(logger);
-                    }
-                } else if (step.type == StepType::StatisticalOutlier) {
-                    auto filter = std::make_shared<StatisticalOutlierFilter>(step.sor_k, step.sor_std_dev);
-                    pipeline->addStage(filter);
-                    has_pending_stages = true;
-                    filters_pending_in_pipeline = true;
-                    if (step.save_output) {
-                        flush_pending_pipeline();
-                        write_step_output(step_counter, nullptr, nullptr);
-                        pipeline = std::make_shared<PointCloudPipeline>(logger);
-                    }
-                } else if (step.type == StepType::ComputeCurvature) {
-                    auto curvature_extractor = std::make_shared<CurvatureExtractor>(
-                        step.curvature_ksearch, static_cast<double>(step.curvature_radius));
-                    pipeline->setCurvatureExtractor(curvature_extractor);
-                    has_pending_stages = true;
-                    if (step.save_output) {
-                        flush_pending_pipeline();
-                        write_step_output(step_counter, nullptr, pipeline->getCurvatures());
-                        pipeline = std::make_shared<PointCloudPipeline>(logger);
-                    }
-                } else if (step.type == StepType::ShowNormals) {
-                    auto normal_extractor = std::make_shared<NormalExtractor>(step.normal_ksearch, 0.0);
-                    pipeline->setNormalExtractor(normal_extractor);
-                    has_pending_stages = true;
-                    capture_display_snapshot(step, step_counter);
-                } else if (is_display_step(step.type)) {
-                    capture_display_snapshot(step, step_counter);
-                }
-            }
-
-            // 执行最后的Pipeline步骤
-            if (has_pending_stages) {
-                pipeline->execute(cloud_to_process);
-            }
-
-            if (vis_data->stage_snapshots.empty()) {
-                VisualizerData::StageSnapshot final_snapshot;
-                final_snapshot.title = "View 1: Final Result";
-                final_snapshot.cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*cloud_to_process);
-                final_snapshot.normals.reset(new pcl::PointCloud<pcl::Normal>());
-                final_snapshot.display = make_default_step(StepType::ShowCloud).display;
-                vis_data->stage_snapshots.push_back(final_snapshot);
-            }
-
+            vis_data->stage_snapshots = std::move(exec_result.snapshots);
             vis_data->should_update = true;
-            logger->log("CustomPipeline", vis_data->cloud_original->size(), cloud_to_process->size());
-            std::cout << "[INFO] Pipeline executed. Final size: " << cloud_to_process->size() << "\n";
+            logger->log("CustomPipeline", exec_result.original_count, exec_result.final_count);
+            std::cout << "[INFO] Pipeline executed. Final size: " << exec_result.final_count << "\n";
         }
 
         if (!cloud_loaded) {

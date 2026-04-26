@@ -18,6 +18,16 @@ std::string get_file_extension(const std::string& filename) {
 }  // namespace
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr PointCloudIO::load(const std::string& filename) {
+    if (filename.empty()) {
+        std::cerr << "Error: empty filename\n";
+        return nullptr;
+    }
+
+    if (!fs::exists(filename)) {
+        std::cerr << "Error: file not found: " << filename << "\n";
+        return nullptr;
+    }
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     try {
         std::string ext = get_file_extension(filename);

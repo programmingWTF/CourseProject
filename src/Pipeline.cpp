@@ -15,10 +15,12 @@ void PointCloudPipeline::setCurvatureExtractor(std::shared_ptr<CurvatureExtracto
 }
 
 pcl::PointCloud<pcl::Normal>::Ptr PointCloudPipeline::getNormals() const {
+    assert(executed_ && "getNormals() called before execute() — results are not yet available");
     return normals_;
 }
 
 pcl::PointCloud<pcl::PrincipalCurvatures>::Ptr PointCloudPipeline::getCurvatures() const {
+    assert(executed_ && "getCurvatures() called before execute() — results are not yet available");
     return curvatures_;
 }
 
@@ -27,6 +29,7 @@ void PointCloudPipeline::execute(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
 
     normals_.reset();
     curvatures_.reset();
+    executed_ = true;
 
     for (const auto& stage : stages_) {
         size_t origin_count = cloud->size();
@@ -43,6 +46,10 @@ void PointCloudPipeline::execute(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     }
 
     if (curvature_extractor_) {
+        // 如果已经计算了法线，直接复用，避免 CurvatureExtractor 内部重复计算
+        if (normals_ && !normals_->empty()) {
+            curvature_extractor_->setInputNormals(normals_);
+        }
         curvatures_ = curvature_extractor_->extract(cloud);
     }
 }

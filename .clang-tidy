@@ -24,4 +24,4 @@ Checks: >-
 # WarningsAsErrors: ''
 
 # 头文件过滤（只检查当前项目的文件，忽略第三方库）
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: 'include/.*|src/.*'
