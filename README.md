@@ -1,67 +1,111 @@
-# Point-Cloud-Pipeline-Control
+# Point Cloud Pipeline Control
 
-## 项目简介
+点云处理流水线可视化控制台
 
-本项目是一个交互式点云处理与可视化工具，基于 ImGui + GLFW + OpenGL 的 GUI 与 PCL 的 3D 可视化。用户可以通过可视化流水线组合滤波、下采样、离群点移除、曲率计算与显示步骤，并为每个“显示”步骤生成独立视口以实时比较不同处理阶段的结果。
+基于 **PCL (Point Cloud Library)** + **ImGui** + **OpenGL** 的点云处理工具，支持交互式构建滤波-特征提取-可视化流水线。
 
-## 主要功能
+## 功能
 
-- 文件浏览并加载点云：支持 `.pcd`、`.ply`、`.bin`。
-- 可组合流水线步骤：PassThrough、VoxelGrid、StatisticalOutlier、计算曲率、显示点云、显示法线。每步独立参数。
-- 可视化：原始点云固定视口 + 每个显示步骤单独视口并行显示。
-- 实时交互式 GUI：调整参数后一键计算并刷新视图。
-- 可扩展：模块化的滤波/特征提取接口，便于添加新算法。
-
-## 目录结构（重要部分）
-
-- `src/` : 源代码（主程序 `main.cpp`、Filters、FeatureExtractors 等）
-- `include/` : 头文件
-- `extern/imgui` : 内置的 ImGui 源文件（backends 包含 GLFW/OpenGL 后端）
-- `data/` : 测试点云数据（默认搜索路径 `../data`）
-- `logs/processing_gui.log` : 处理日志
-
-## 测试数据说明
-
-- `data/0000000000.bin`：二进制点云样例，用于验证 `.bin` 读取与保存流程。
-- `data/bun_zipper.ply`：经典 Bunny 模型，适合检查点云加载、滤波和法线显示效果。
-- `data/dragonStandRight_336.ply`：更复杂的 PLY 模型，适合做多步骤流水线对比。
-- `data/output/`：程序运行后生成的结果目录，不建议手动覆盖。
+- 📂 支持 `.pcd` / `.ply` / `.bin` (KITTI / XYZ) 格式的点云文件
+- 🔧 滤波器：`PassThrough` / `VoxelGrid` / `StatisticalOutlier`
+- 📐 特征提取：法线估计 + 主曲率计算
+- 🎨 多视口 3D 可视化（原始点云 + 各步骤结果）
+- 🧩 拖拽式流水线编辑器（步骤增删改、排序、参数调节）
+- 💾 流水线执行结果按步骤保存到 `output/` 目录
+- 🌐 中文 ImGui 界面（微软雅黑）
 
 ## 依赖
 
-- CMake >= 3.10
-- PCL >= 1.8（包含 visualization）
-- OpenGL
-- GLFW (建议通过 vcpkg 安装)
-- Visual Studio (Windows) / GCC (Linux)
-- 已包含 ImGui 后端代码在 `extern/imgui`（无需额外安装）
+| 依赖 | 版本要求 | 安装方式 |
+|------|---------|---------|
+| PCL | ≥ 1.8 | [vcpkg](https://github.com/microsoft/vcpkg) 或 [官网](https://pointclouds.org/) |
+| GLFW 3 | - | vcpkg: `vcpkg install glfw3` |
+| OpenGL | - | 系统自带 |
+| CMake | ≥ 3.10 | [cmake.org](https://cmake.org/) |
+| MSVC / Clang / GCC | C++17 | VS 2022 / Clang 14+ / GCC 11+ |
 
-推荐在 Windows 上使用 vcpkg 来安装 PCL/GLFW：
+> 实际开发环境：Visual Studio 2022 + vcpkg (x64-windows) + MSVC
 
-```powershell
-# 示例（需先安装 vcpkg 并集成到 CMake）
-vcpkg install pcl:x64-windows glfw3:x64-windows
-```
-
-## 构建（示例）
-
-在仓库根目录下：
+## 编译
 
 ```bash
-cmake -S . -B build
+# 1. 配置（指定 vcpkg toolchain）
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=D:/Software/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+# 2. 编译
 cmake --build build --config Release
 ```
 
-> [!CAUTION]
-> 注意：CMakeLists 中使用 `find_package(glfw3 CONFIG REQUIRED)`，在 Windows 下建议使用 vcpkg 来保证依赖被正确发现。
+> 如果 vcpkg 路径不同，请修改 `CMAKE_TOOLCHAIN_FILE` 为你的 vcpkg 安装路径。  
+> 也可以在 VS 中直接打开 CMakeLists.txt，IDE 会自动检测 vcpkg。
 
-## 运行
+## 使用
 
-生成后直接运行可执行文件（Windows 下为 `Point-Cloud-Pipeline-Control.exe`）。
+```bash
+cd build/Release
+./Point-Cloud-Pipeline-Control.exe
+```
 
-## 常见问题与调试
+1. **加载点云**：在搜索文件夹中输入数据目录（默认 `../data`），点击文件名选择，再点"加载当前选择文件"。也可点击"浏览..."按钮用系统对话框选择文件。
+2. **编辑流水线**：拖拽步骤排序、修改参数（如滤波轴/范围、体素大小、曲率参数等）
+3. **执行**：点击"执行流水线"按钮，后台异步执行（不影响 UI 操作）
+4. **查看结果**：PCL Viewer 窗口会显示多视口对比；勾选"保存输出"可在源文件目录的 `output/` 文件夹下保存中间结果
+5. **重置**：点击"重置"按钮恢复到原始点云
 
-- 如果 GUI 中中文显示为问号，检查是否加载到中文字体（程序会尝试寻找系统字体）。
-- 点云加载失败：确认 `搜索文件夹` 路径正确，或在 `data/` 中放入测试文件。
-- 若在构建时遇到找不到 PCL/GLFW，请确认 vcpkg 已安装对应包并在 CMake 调用中使用 `-DCMAKE_TOOLCHAIN_FILE` 指向 vcpkg 的 toolchain 文件。
-- `FeatureBase<PointInT, FeatureOutT>` 当前以 `PointXYZ` 为主，但模板接口本身已经保留了扩展到 `PointXYZRGB`、`PointXYZI` 等点类型的空间。
+## 项目结构
+
+```
+CourseProject/
+├── CMakeLists.txt          # CMake 构建配置
+├── README.md
+├── .clang-format           # 代码格式化规则
+├── .clang-tidy             # 静态分析规则
+├── include/                # 头文件
+│   ├── FeatureBase.hpp     # 特征提取基类
+│   ├── FeatureExtractors.hpp  # 法线/曲率提取器
+│   ├── FilterBase.hpp      # 滤波器基类
+│   ├── Filters.hpp         # PassThrough/VoxelGrid/StatisticalOutlier
+│   ├── Logger.hpp          # 处理日志
+│   ├── Pipeline.hpp        # 流水线引擎
+│   └── PointCloudIO.hpp    # 点云 IO（读写）
+├── src/                    # 源文件
+│   ├── main.cpp            # GUI 主程序
+│   ├── FeatureExtractors.cpp
+│   ├── Filters.cpp
+│   ├── Logger.cpp
+│   ├── Pipeline.cpp
+│   └── PointCloudIO.cpp
+├── extern/imgui/           # Dear ImGui 源码
+├── fonts/                  # 字体文件
+└── data/                   # 示例点云数据
+    ├── bun_zipper.ply
+    ├── dragonStandRight_336.ply
+    └── 0000000000.bin      # KITTI 格式
+```
+
+## 架构
+
+```
+[文件加载] → [ImGui 流水线编辑器] → [异步后台执行]
+                 ↓
+[Filter Pipeline (Strategy Pattern)]
+  ├── PassThroughFilter
+  ├── VoxelGridFilter
+  └── StatisticalOutlierFilter
+                 ↓
+[Feature Extraction (Template Base)]
+  ├── NormalExtractor
+  └── CurvatureExtractor
+                 ↓
+[PCLVisualizer 多视口 3D 渲染]
+```
+
+## 已知限制
+
+- `.bin` 文件自动检测 KITTI (16B/点) vs XYZ (12B/点) 格式，不支持其他变体
+- 仅支持 Windows (ImGui + GLFW + Win32 原生对话框)
+- 可视化窗口需要 OpenGL 3.0+ 支持
+
+## License
+
+MIT - 课程设计项目

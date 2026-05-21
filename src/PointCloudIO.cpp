@@ -53,16 +53,44 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr PointCloudIO::load(const std::string& filena
                 throw std::runtime_error("Failed to open .bin file.");
             }
 
-            float data[4];  // x, y, z, intensity（忽略 intensity）
-            while (input.read(reinterpret_cast<char*>(data), sizeof(data))) {
-                pcl::PointXYZ point;
-                point.x = data[0];
-                point.y = data[1];
-                point.z = data[2];
-                cloud->push_back(point);
+            // 支持两种常见的 .bin 点云格式：
+            //   - KITTI 格式：每点 4 个 float (x, y, z, intensity)
+            //   - XYZ-only 格式：每点 3 个 float (x, y, z)
+            // 自动根据文件大小判断：文件可被 16 整除 → KITTI 格式；否则 → XYZ 格式
+            input.seekg(0, std::ios::end);
+            auto file_size = input.tellg();
+            input.seekg(0, std::ios::beg);
+
+            const bool is_kitti_format = (file_size % 16 == 0) && (file_size % 12 != 0);
+            const size_t point_size = is_kitti_format ? 16 : 12;
+            const size_t num_points = file_size / point_size;
+
+            cloud->reserve(num_points);
+
+            if (is_kitti_format) {
+                float data[4];  // x, y, z, intensity
+                for (size_t i = 0; i < num_points; ++i) {
+                    if (!input.read(reinterpret_cast<char*>(data), sizeof(data))) break;
+                    pcl::PointXYZ point;
+                    point.x = data[0];
+                    point.y = data[1];
+                    point.z = data[2];
+                    cloud->push_back(point);
+                }
+            } else {
+                float data[3];  // x, y, z
+                for (size_t i = 0; i < num_points; ++i) {
+                    if (!input.read(reinterpret_cast<char*>(data), sizeof(data))) break;
+                    pcl::PointXYZ point;
+                    point.x = data[0];
+                    point.y = data[1];
+                    point.z = data[2];
+                    cloud->push_back(point);
+                }
             }
             input.close();
-            std::cout << "Loaded " << cloud->size() << " data points from " << filename << "";
+            std::cout << "Loaded " << cloud->size() << " data points from " << filename
+                      << " (" << (is_kitti_format ? "KITTI" : "XYZ") << " format)";
             return cloud;
         }
 
